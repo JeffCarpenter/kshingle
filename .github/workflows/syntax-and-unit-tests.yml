@@ -1,33 +1,76 @@
-name: Python application
+name: Test
 
-on: [push]
+on: [push, workflow_dispatch]
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
 
 jobs:
   build:
-
-    runs-on: ubuntu-18.04
+    runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        python-version: ['3.6', '3.7', '3.8', '3.9']
-    
-    name: Python ${{ matrix.python-version }} Tests
+        os: ['ubuntu-18.10', 'ubuntu-latest', 'windows-latest']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    name: ${{ matrix.os }} ${{ matrix.python-version }} Tests
 
     steps:
-    - uses: actions/checkout@v1
-    - name: Setup python
-      uses: actions/setup-python@v1
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
         architecture: x64
+
+    - name: Cache packages
+      uses: actions/cache@v4.2.3
+      with:
+        path: |
+          ~/.cache/pip
+          ~/.cache/uv
+        key: ${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('setup.py', 'requirements.txt', 'requirements-dev.txt', 'pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.python-version }}-
+          ${{ runner.os }}-
+
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
+        pip install uv
+        uv pip install --system -r requirements.txt
+        uv pip install --system -r requirements-dev.txt
+
     - name: Lint with flake8
       run: |
         flake8 --ignore=F401 --exclude=$(grep -v '^#' .gitignore | xargs | sed -e 's/ /,/g')
+
     - name: Unit Test with pytest
       run: |
-        pytest
+        pytest --junitxml=test-results-${{ matrix.os }}-${{ matrix.python-version }}.xml --cov --cov-report=xml --cov-report=term-missing
+      continue-on-error: true
+
+    - name: Test Report
+      uses: dorny/test-reporter@v2
+      if: ${{ !cancelled() }}
+      with:
+        name: 'Pytest Results (${{ matrix.os }}, Python ${{ matrix.python-version }})'
+        path: 'test-results-${{ matrix.os }}-${{ matrix.python-version }}.xml'
+        reporter: 'java-junit'
+        fail-on-error: true
+        fail-on-empty: true
+        max-annotations: 50
+
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: test-artifacts-${{ matrix.os }}-${{ matrix.python-version }}
+        path: |
+          test-results-${{ matrix.os }}-${{ matrix.python-version }}.xml
+          test-report.html
+          coverage.xml
+        retention-days: 30
